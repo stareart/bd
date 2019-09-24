@@ -1,0 +1,52 @@
+1.简述Hive工作原理
+    (1)用户提交SQL任务到Driver
+    (2)解析器将SQL语法解析为抽象语法树AST，并做语法分析，包括判断表、字段是否存在、语义是与否有误
+    (3)编译器对AST生成执行计划（多个MR任务）
+    (4)优化器对执行计划进行优化
+    (5)执行器提交执行计划到YARN
+---------------------------------------------------------------
+2.hive内部表和外部表区别
+    (1)内部表建表时需要多加一个external关键字
+    (2)内部表删除后，元素据和真是数据都会被删除，外部表仅删除元数据
+---------------------------------------------------------------
+3.有以下格式的数据创建出合适的表结构，并将数据导入表中
+
+战狼2,吴京:吴刚:卢婧姗,2017-08-16
+大话西游,周星驰:吴孟达,1995-09-01
+哪吒,吕艳婷:瀚墨,2019-07-26
+使徒行者2,张家辉:古天乐:吴镇宇,2019-08-07
+鼠胆英雄,岳云鹏:佟丽娅:田雨:袁弘,2019-08-02
+
+#建表语句
+    create table if not exists movie(name String,actor_list array<string>,year String)
+    row format delimited fields terminated by ',' collection items terminated by':';
+#加载数据
+    load data local inpath '/opt/app/data/hive_movie.txt' into table movie;
+3.1 查询出每个电影的第二个主演
+    select name,actor_list[1] as actor_index_2 from movie;
+3.2 查询每部电影有几名主演
+    select name,size(actor_list) as size_actor_list from movie;
+3.3主演里面包含古天乐的电影
+    select name from movie where array_contains(actor_list ,'古天乐');
+
+---------------------------------------------------------------
+4.有以下格式的数据创建出合适的表结构，并将数据导入表中
+
+1,张三,18:male:北京
+2,李四,29:female:上海
+3,杨朝来,22:male:深圳 
+4,蒋平,34:male:成都
+5,唐灿华,25:female:哈尔滨
+6,马达,17:male:北京
+7,赵小雪,23:female:杭州
+8,薛文泉,26:male:上海
+9,丁建,29:male:北京
+
+#建表语句
+    create table if not exists user(id int,name string,info struct<age:tinyint,sex:string,city:string>)
+    row format delimited fields terminated by ',' collection items terminated by':';
+#加载数据
+    load data local inpath '/opt/app/data/hive_user.txt' overwrite into table user;
+
+4.1 查询出每个人的id,名字,居住地址
+    select id,name,info.city from user;
