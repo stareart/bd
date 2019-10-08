@@ -1,0 +1,127 @@
+##1.Hive导出数据有几种方式？如何导出数据
+
+1.insert
+（1）将查询结果导出到本地
+insert overwrite local directory '/opt/app/data/user_out' select * from user;
+
+（2）将查询结果格式化导出到本地
+insert overwrite local directory '/opt/app/data/user_out_std' row format delimited fields terminated by '|' select  * from user;
+
+（3）将查询结果导出到HDFS上
+insert overwrite directory '/data/20190926/user_out_by_insert' row format delimited fields terminated by '|' select * from user;
+
+2.hadoop命令
+hadoop fs -get /user/hive/work1/user/user.txt /opt/app/data/user_out_from_hdfs
+
+3.Bash shell覆盖追加导出 
+bin/hive -e 'select * from work1.user' > /opt/app/data/user_out_by_hive
+
+4.export导出到hdfs
+export table work1.user to '/data/20190926/user_out_by_export' 
+
+##2.将一个表的数据按照指定的分隔符（@）导出成一个文件。(HDFS)
+insert overwrite directory '/data/20190926/user_out_by_fixTeminate' row format delimited fields terminated by '@' select * from user;
+
+##3.分区和分桶的区别
+（1）粒度不同：分区对应不同的文件夹，粗粒度；粪桶对应不同的文件，细粒度。
+（2）切分规则不同：分区按照列值（或指定值）进行分割；分桶按照设定的规则（如hash值求模）进行分割。
+
+
+##4.将数据直接上传到分区目录（hdfs）上，让分区表和数据产生关联有哪些方式？
+（1）上传数据后修复
+hadoop fs -mkdir -p /user/hive/warehouse/work2.db/order/month=201905
+hadoop fs -put /opt/app/data/order.txt /user/hive/warehouse/work2.db/order/month=201905/
+msck repair table order;
+
+（2）上传数据后添加分区
+hadoop fs -mkdir -p /data/order/month=201904
+hadoop fs -put /opt/app/data/order.txt /user/hive/warehouse/work2.db/order/month=201904/
+alter table order add partition(month='201904');
+
+
+##5.桶表是否可以通过直接load将数据导入？
+不可以。分桶需要MR操作，需要通过中间表完成分桶操作。
+
+##6.hive中分区可以提高查询效率，分区是否越多越好，为什么？
+不是。
+（1）HDFS局限：若分区不断增加，子目录数量也会随着增长，HDFS存在大量小文件（夹）会增加namenode负担。
+（2）MR局限：当小文件过多时，一个Map需要一个task，多个task会影响系统总体效率。
+
+
+补充：
+###分桶表加载数据
+造数据：
+vim user_bucket.txt
+1	laowang1
+2	laowang2
+3	laowang3
+4	laowang4
+5	laowang5
+6	laowang6
+7	laowang7
+8	laowang8
+9	laowang9
+10	laowang10
+
+create database work2;
+use work2;
+开启模式：
+set mapreduce.job.reduces=4;
+set hive.enforce.bucketing=true;
+
+建目标表：
+create table user_buckets(id int,name string)
+clustered by(id)
+into 4 buckets
+row format delimited fields terminated by '\t';
+
+建基表：
+create table user(id int,name string)
+row format delimited fields terminated by '\t';
+
+
+加载数据到基表：load data local inpath '/opt/app/data/user_bucket.txt' into table user;
+加载数据到目标表：insert into table user_buckets select * from user;
+查询：select * from user_buckets tablesample(bucket 1 out of 2);
+
+
+
+###静态分区
+造数据：
+vim order.txt 
+10001	100	2019-03-02
+10002	200	2019-03-02
+10003	300	2019-03-02
+10004	400	2019-03-03
+10005	500	2019-03-03
+10006	600	2019-03-03
+10007	700	2019-03-04
+10008	800	2019-03-04
+10009	900	2019-03-04
+
+建目标表：
+create table order(number string,price double,time string)
+partitioned by(month string)
+row format delimited fields terminated by '\t';
+加载数据：load data local inpath '/opt/app/data/order.txt' overwrite into table order partition(month='201903');
+查询：select * from order where month = '201903';
+
+####动态分区
+建基表：
+create table order_d(number string,price double,time string)
+row format delimited fields terminated by '\t';
+建目标表（动态分区的字段在字段中不能存在：
+create table order_partition(number string,price double)
+partitioned by(time string)
+row format delimited fields terminated by '\t';
+加载数据：load data local inpath '/opt/app/data/order.txt' into table order_d;
+开启分区功能：set hive.exec.dynamic.partition=true;
+设置模式：set hive.exec.dynamic.partition.mode=nonstrict;
+插入数据：insert into table order_partition partition(time) select number,price,time from order_d;
+
+
+create table order_partition_number(price double,time string)
+partitioned by(number string)
+row format delimited fields terminated by '\t';
+
+insert into table order_partition_number partition(number) select number,price,time from order_d;

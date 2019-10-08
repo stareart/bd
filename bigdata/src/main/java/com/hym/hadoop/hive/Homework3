@@ -1,0 +1,152 @@
+1.order by,sort by,distribute by,cluster by的区别？
+
+(1)order by：全局排序，仅保证1个reducer时有序
+
+(2)sort by：同个reducer排序
+
+(3)distribute by：控制map的输出在reducer中的划分，可保证同个Key落在同个reducer
+
+(4)cluster by：sort by和distribute by的合体，仅可升序排
+
+2.聚合函数是否可以写在order by后面，为什么？
+
+3.有以下数据
+
+10001	100	2019-03-01
+10002	200	2019-03-02
+10003	300	2019-03-03
+10004	400	2019-04-01
+10005	500	2019-04-02
+10006	600	2019-04-03
+10007	700	2019-05-01
+10008	800	2019-05-02
+10009	900	2019-05-03
+10010	910	2019-06-01
+10011	920	2019-06-02
+10012	930	2019-06-03
+
+3.1 把以上数据利用动态分区导入到分区表中(按照年、月进行多级分区)
+create database work3;
+use work3;
+create table list_d(id int,price int,date string)
+row format delimited fields terminated by '\t';
+create table list(id int,price int,date string)
+partitioned by(year string,month string)
+row format delimited fields terminated by '\t';
+load data local inpath '/opt/app/data/list1007.txt' into table list_d;
+set hive.exec.dynamic.partition=true;
+set hive.exec.dynamic.partition.mode=nonstrict;
+insert into table list partition(year,month) select id,price,date,year(to_date(date)),month(to_date(date)) from list_d;
+
+4.根据user_trade（用户购买明细）数据创建出合理的表结构，导入数据
+create table user_trade(name string,age int,price float,total float,category string,phone string)
+partitioned by (dt string)
+row format delimited fields terminated by '\t';
+hadoop fs -put /opt/app/data/user_trade/* /user/hive/warehouse/work3.db/user_trade/
+msck repair table user_trade;
+4.1 查出2019年一月到四月，每个品类有多人购买，累计金额是多少？
+select substring(dt,0,7) as month,user_trade.category as category,count(distinct user_trade.name) as count,sum(user_trade.total) as sum
+from user_trade
+where substring(dt,0,7) in('2019-01','2019-02','2019-03','2019-04')
+group by substring(dt,0,7),user_trade.category;
+
+4.2 查出2019年4月，支付金额超过五万元的用户
+select user_trade.name,sum(user_trade.total) as sum from user_trade
+where substring(dt,0,7)='2019-04'
+group by user_trade.name
+having sum(user_trade.total)>50000;
+4.3 查出2019年4月，支付金额最多的top5用户
+select user_trade.name,sum(user_trade.total) as tl
+from user_trade
+where substring(dt,0,7)='2019-04'
+group by user_trade.name
+order by tl desc
+limit 5;
+
+5.根据user_info（用户信息）数据创建出合理的表结构，导入数据
+drop table user_info;
+create table user_info(id string,name string,sex string,age int,city string,dt string,level int,desc1 map<string,string>,desc2 map<string,string>)
+row format delimited fields terminated by '\t'
+collection items terminated by ','
+map keys terminated by ':';
+load data local inpath "/opt/app/data/user_info/user_info.txt" overwrite into table user_info;
+5.1 用户的首次激活时间，与20195月1日的日期间隔
+select id,datediff('2019-05-01 00:00:00',dt)
+from user_info;
+
+5.2 统计一下四个年龄段20岁以下，20-30岁，30-40岁，40岁以上的用户数
+select a.age_group,count(a.age_group) as count
+from (
+select case  when age<20 then '20岁以下'
+ when age<30 then '20-30岁'
+ when age<40 then '30-40岁'
+else '40岁以上' end as age_group
+ from user_info)a
+ group by age_group;
+
+5.3 统计每个性别用户等级高低的分布情况（level大于5为高级）
+select a.sex,a.ll ,sum(a.cnt)
+from(
+select sex,case when level<=5 then '低级' else '高级' end as ll,count(*) as cnt
+from user_info
+group by sex,level) a
+group by a.sex,a.ll
+
+5.4 统计每个月新激活的用户数
+select substring(dt,0,7),count(*)
+from user_info
+group by substring(dt,0,7);
+
+5.5 统计不同手机品牌的用户数
+select desc2['phonebrand'],count(*)
+from user_info
+group by desc2['phonebrand'];
+
+6.现在我们已经有了两张表，我们再根据user_refund(退款信息)创建出合理的表结构，导入数据
+create table  user_refund(name string,price float,total float,time string)
+partitioned by(dt string)
+row format delimited fields terminated by '\t';
+hadoop fs -put /opt/app/data/user_refund/* /user/hive/warehouse/work3.db/user_refund/
+msck repair table user_refund;
+
+6.1 在2019年购买后又退款的用户
+select a.name,a.price,a.total,b.price,b.total,b.time
+from user_trade a,user_refund b
+where a.dt like '2019%'
+and a.name = b.name;
+6.2 在2019年购买，但是没有退款的用户
+select a.*
+from user_trade a left join user_refund b on a.name = b.name
+where a.dt like '2019%'
+and b.price is null;
+
+6.3 在2017年和2018年都购买的用户
+select a.name
+from (select name from user_trade where dt like '2017%') a ,(select name from user_trade where dt like '2018%') b
+where a.name=b.name
+and a.name is not null;
+
+6.4 在2019年购买用户的学历分布在
+select c.edu,count(*)
+from (
+select a.name,b.edu
+from  (select name from user_trade where dt like '2019%') a,(select name,desc2['education'] as edu from user_info ) b
+where a.name=b.name )c
+group by c.edu;
+
+6.5 2019年每个用户的支付和退款金额汇总
+select a.name,a.total+b.total as tl,b.time
+from user_trade a,user_refund b
+where a.dt like '2019%'
+and a.name = b.name;
+
+6.6 首次激活时间在2017年，但是一直没有支付的用户年龄段分布
+select c.age,count(*)
+from (
+select a.name,a.age
+from (select name,age from user_info where dt like '2017%') a left join (select name from user_trade) b on a.name=b.name
+where b.name is null)c
+group by c.age;
+
+
+
